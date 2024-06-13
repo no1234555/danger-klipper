@@ -456,19 +456,22 @@ class MpcCalibrate:
             self.heater.set_control(old_control)
             self.heater.alter_target(0.0)
 
-    def wait_settle(self, max_rate):
+    def wait_settle(self, max_rate, min_time=8.0):
         last_temp = None
         next_check = None
         samples = []
 
         def process(eventtime):
-            temp, _ = self.heater.get_temp(eventtime)
+            temp, target = self.heater.get_temp(eventtime)
+            if target > 1 and abs(target - temp) > 0.1:
+                samples.clear() # reset
+                return True
             samples.append((eventtime, temp))
-            while samples[0][0] < eventtime - 10.0:
+            while samples[0][0] < eventtime - (min_time + 2.0):
                 samples.pop(0)
             dT = samples[-1][1] - samples[0][1]
             dt = samples[-1][0] - samples[0][0]
-            if dt < 8.0:
+            if dt < min_time:
                 return True
             rate = abs(dT / dt)
             return not rate < max_rate
@@ -541,8 +544,8 @@ class MpcCalibrate:
             % (target_temp,)
         )
 
-        self.wait_settle(0.2)
-        gcmd.respond_info("Temperature stable, performing power tests")
+        gcmd.respond_info("Waiting for heat soak")
+        self.wait_settle(0.05)
 
         fan = self.orig_control.cooling_fan
 
@@ -559,6 +562,9 @@ class MpcCalibrate:
                     curtime = self.heater.reactor.monotonic()
                     print_time = fan.get_mcu().estimated_print_time(curtime)
                     fan.set_speed(print_time + PIN_MIN_TIME, speed)
+                    gcmd.respond_info("Waiting for temperature to stabilize")
+                    self.wait_settle(0.01, 20.0)
+                    gcmd.respond_info(f"Temperature stable, measuring power usage with {speed*100.:.0f}% fan speed")
                     power = self.measure_power(
                         ambient_max_measure_time, ambient_measure_sample_time
                     )
