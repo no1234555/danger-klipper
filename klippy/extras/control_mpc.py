@@ -456,22 +456,49 @@ class MpcCalibrate:
             self.heater.set_control(old_control)
             self.heater.alter_target(0.0)
 
-    def wait_settle(self, max_rate, min_time=8.0):
+    def wait_stable(self, cycles=5):
+        """
+        We wait for the extruder to cycle x amount of times above and below the target
+        doing this should ensure the temperature is stable enough to give a good result
+        as a fallback if it stays within 0.1 degree for ~12 seconds it is also accepted
+        """
+
+        below_target = True
+        above_target = 0
+        on_target = 0
+
+        def process(eventtime):
+            nonlocal below_target, above_target, on_target
+            temp, target = self.heater.get_temp(eventtime)
+            if below_target and temp > target:
+                above_target += 1
+                below_target = False
+            elif not below_target and temp < target:
+                below_target = True
+            if above_target >= cycles:
+                return False
+            if abs(target - temp) < 0.1:
+                on_target += 1
+            else:
+                on_target = 0
+            if on_target >= 120: # in case the heating is super consistent
+                return False
+            return True
+        self.printer.wait_while(process, True, 0.1)
+
+    def wait_settle(self, max_rate):
         last_temp = None
         next_check = None
         samples = []
 
         def process(eventtime):
-            temp, target = self.heater.get_temp(eventtime)
-            if target > 1 and abs(target - temp) > 0.1:
-                samples.clear() # reset
-                return True
+            temp, _ = self.heater.get_temp(eventtime)
             samples.append((eventtime, temp))
-            while samples[0][0] < eventtime - (min_time + 2.0):
+            while samples[0][0] < eventtime - 10:
                 samples.pop(0)
             dT = samples[-1][1] - samples[0][1]
             dt = samples[-1][0] - samples[0][0]
-            if dt < min_time:
+            if dt < 8:
                 return True
             rate = abs(dT / dt)
             return not rate < max_rate
@@ -544,8 +571,7 @@ class MpcCalibrate:
             % (target_temp,)
         )
 
-        gcmd.respond_info("Waiting for heat soak")
-        self.wait_settle(0.05)
+        self.wait_stable(5)
 
         fan = self.orig_control.cooling_fan
 
@@ -563,7 +589,7 @@ class MpcCalibrate:
                     print_time = fan.get_mcu().estimated_print_time(curtime)
                     fan.set_speed(print_time + PIN_MIN_TIME, speed)
                     gcmd.respond_info("Waiting for temperature to stabilize")
-                    self.wait_settle(0.01, 20.0)
+                    self.wait_stable(3)
                     gcmd.respond_info(f"Temperature stable, measuring power usage with {speed*100.:.0f}% fan speed")
                     power = self.measure_power(
                         ambient_max_measure_time, ambient_measure_sample_time
