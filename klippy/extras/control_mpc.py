@@ -494,11 +494,11 @@ class MpcCalibrate:
         def process(eventtime):
             temp, _ = self.heater.get_temp(eventtime)
             samples.append((eventtime, temp))
-            while samples[0][0] < eventtime - 10:
+            while samples[0][0] < eventtime - 10.0:
                 samples.pop(0)
             dT = samples[-1][1] - samples[0][1]
             dt = samples[-1][0] - samples[0][0]
-            if dt < 8:
+            if dt < 8.0:
                 return True
             rate = abs(dT / dt)
             return not rate < max_rate
